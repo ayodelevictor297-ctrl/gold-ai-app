@@ -90,82 +90,96 @@ def home():
 
 @app.get("/ai-signal")
 def generate_ai_gold_signal():
-    try:
-        df = yf.download(GOLD_TICKER, period="1mo", interval="1h", progress=False)
-        
-        if df.empty:
-            raise HTTPException(status_code=404, detail="No market data returned for Gold.")
-            
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+  try:
+    df = yf.download(GOLD_TICKER, period="1mo", interval="1h", progress=False)
 
-        close_prices = df['Close'].astype(float)
-        high_prices = df['High'].astype(float)
-        low_prices = df['Low'].astype(float)
-        
-        delta = close_prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+    if df.empty:
+      raise HTTPException(
+          status_code=404, detail="No market data returned for Gold."
+      )
 
-        tr1 = high_prices - low_prices
-        tr2 = (high_prices - close_prices.shift()).abs()
-        tr3 = (low_prices - close_prices.shift()).abs()
-        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        df['ATR'] = true_range.rolling(window=14).mean()
+    if isinstance(df.columns, pd.MultiIndex):
+      df.columns = df.columns.get_level_values(0)
 
-        df['SMA_50'] = close_prices.rolling(window=50).mean()
-        df['SMA_200'] = close_prices.rolling(window=200).mean()
+    close_prices = df["Close"].astype(float)
+    high_prices = df["High"].astype(float)
+    low_prices = df["Low"].astype(float)
 
-        latest = df.iloc[-1]
-        current_price = float(latest['Close'])
-        rsi_val = float(latest['RSI']) if not pd.isna(latest['RSI']) else 50.0
-        atr_val = float(latest['ATR']) if not pd.isna(latest['ATR']) else 15.0
-        sma_50 = float(latest['SMA_50']) if not pd.isna(latest['SMA_50']) else current_price
-        sma_200 = float(latest['SMA_200']) if not pd.isna(latest['SMA_200']) else current_price
+    # Calculate RSI (14)
+    delta = close_prices.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df["RSI"] = 100 - (100 / (1 + rs))
 
-        if sma_50 > sma_200:
-            trend = "Bullish"
-            signal = "BUY (LONG)"
-            stop_loss = round(current_price - (atr_val * 1.5), 2)
-            tp_1 = round(current_price + (atr_val * 2.0), 2)
-            tp_2 = round(current_price + (atr_val * 3.5), 2)
-        else:
-            trend = "Bearish"
-            signal = "SELL (SHORT)"
-            stop_loss = round(current_price + (atr_val * 1.5), 2)
-            tp_1 = round(current_price - (atr_val * 2.0), 2)
-            tp_2 = round(current_price - (atr_val * 3.5), 2)
+    # Calculate ATR (14)
+    tr1 = high_prices - low_prices
+    tr2 = (high_prices - close_prices.shift()).abs()
+    tr3 = (low_prices - close_prices.shift()).abs()
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df["ATR"] = true_range.rolling(window=14).mean()
 
-        rsi_condition = "Overbought" if rsi_val > 70 else ("Oversold" if rsi_val < 30 else "Neutral")
+    # Calculate EMA 20 & EMA 50 Trend Confluence
+    df["EMA_20"] = close_prices.ewm(span=20, adjust=False).mean()
+    df["EMA_50"] = close_prices.ewm(span=50, adjust=False).mean()
 
-        ai_commentary = f"Quantitative Engine Active: Gold is showing a {trend.lower()} bias at ${current_price:.2f} with RSI at {rsi_val:.2f} ({rsi_condition}). Volatility-adjusted risk management is locked in with a {signal} setup."
+    latest = df.iloc[-1]
+    current_price = float(latest["Close"])
+    rsi_val = float(latest["RSI"]) if not pd.isna(latest["RSI"]) else 50.0
+    atr_val = float(latest["ATR"]) if not pd.isna(latest["ATR"]) else 15.0
+    ema_20 = (
+        float(latest["EMA_20"]) if not pd.isna(latest["EMA_20"]) else current_price
+    )
+    ema_50 = (
+        float(latest["EMA_50"]) if not pd.isna(latest["EMA_50"]) else current_price
+    )
 
-        return {
-            "asset": "Gold (XAU/USD)",
-            "timestamp": str(df.index[-1]),
-            "current_price": round(current_price, 2),
-            "ai_market_insight": ai_commentary,
-            "signal_setup": {
-                "action": signal,
-                "market_bias": trend,
-                "suggested_entry": round(current_price, 2),
-                "stop_loss_sl": stop_loss,
-                "take_profit_1": tp_1,
-                "take_profit_2": tp_2,
-            },
-            "technical_indicators": {
-                "rsi_14": round(rsi_val, 2),
-                "rsi_condition": rsi_condition,
-                "atr_volatility": round(atr_val, 2),
-                "sma_50": round(sma_50, 2),
-                "sma_200": round(sma_200, 2)
-            }
-        }
+    # Confluence Signal Logic
+    if ema_20 > ema_50:
+      trend = "Bullish"
+      signal = "BUY (LONG)"
+      stop_loss = round(current_price - (atr_val * 1.5), 2)
+      tp_1 = round(current_price + (atr_val * 2.0), 2)
+      tp_2 = round(current_price + (atr_val * 3.5), 2)
+    else:
+      trend = "Bearish"
+      signal = "SELL (SHORT)"
+      stop_loss = round(current_price + (atr_val * 1.5), 2)
+      tp_1 = round(current_price - (atr_val * 2.0), 2)
+      tp_2 = round(current_price - (atr_val * 3.5), 2)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    rsi_condition = (
+        "Overbought"
+        if rsi_val > 70
+        else ("Oversold" if rsi_val < 30 else "Neutral")
+    )
+
+    ai_commentary = f"Quantitative Engine Active (EMA Confluence): Gold is showing a {trend.lower()} bias at ${current_price:.2f} with RSI at {rsi_val:.2f} ({rsi_condition}). EMA 20 is at ${ema_20:.2f} and EMA 50 is at ${ema_50:.2f}. Risk management locked in with a {signal} setup."
+
+    return {
+        "asset": "Gold (XAU/USD)",
+        "timestamp": str(df.index[-1]),
+        "current_price": round(current_price, 2),
+        "ai_market_insight": ai_commentary,
+        "signal_setup": {
+            "action": signal,
+            "market_bias": trend,
+            "suggested_entry": round(current_price, 2),
+            "stop_loss_sl": stop_loss,
+            "take_profit_1": tp_1,
+            "take_profit_2": tp_2,
+        },
+        "technical_indicators": {
+            "rsi_14": round(rsi_val, 2),
+            "rsi_condition": rsi_condition,
+            "atr_volatility": round(atr_val, 2),
+            "ema_20": round(ema_20, 2),
+            "ema_50": round(ema_50, 2),
+        },
+    }
+
+  except Exception as e:
+    raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/send-telegram-signal")
 def trigger_telegram_signal():
