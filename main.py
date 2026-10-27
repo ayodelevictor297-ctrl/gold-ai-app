@@ -91,62 +91,100 @@ def home():
 @app.get("/ai-signal")
 def generate_ai_gold_signal():
   try:
-    df = yf.download(GOLD_TICKER, period="1mo", interval="1h", progress=False)
-
-    if df.empty:
+    # 1. Fetch 1-Hour Data (Tactical Execution Timeframe)
+    df_1h = yf.download(
+        GOLD_TICKER, period="1mo", interval="1h", progress=False
+    )
+    if df_1h.empty:
       raise HTTPException(
-          status_code=404, detail="No market data returned for Gold."
+          status_code=404, detail="No 1H market data returned for Gold."
       )
 
-    if isinstance(df.columns, pd.MultiIndex):
-      df.columns = df.columns.get_level_values(0)
+    if isinstance(df_1h.columns, pd.MultiIndex):
+      df_1h.columns = df_1h.columns.get_level_values(0)
 
-    close_prices = df["Close"].astype(float)
-    high_prices = df["High"].astype(float)
-    low_prices = df["Low"].astype(float)
+    # 2. Fetch Daily Data (Macro Trend Confluence Timeframe)
+    df_1d = yf.download(
+        GOLD_TICKER, period="6mo", interval="1d", progress=False
+    )
+    if isinstance(df_1d.columns, pd.MultiIndex):
+      df_1d.columns = df_1d.columns.get_level_values(0)
 
-    # Calculate RSI (14)
-    delta = close_prices.diff()
+    # --- 1H Technical Calculations ---
+    close_1h = df_1h["Close"].astype(float)
+    high_1h = df_1h["High"].astype(float)
+    low_1h = df_1h["Low"].astype(float)
+
+    delta = close_1h.diff()
     gain = delta.where(delta > 0, 0).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
-    df["RSI"] = 100 - (100 / (1 + rs))
+    df_1h["RSI"] = 100 - (100 / (1 + rs))
 
-    # Calculate ATR (14)
-    tr1 = high_prices - low_prices
-    tr2 = (high_prices - close_prices.shift()).abs()
-    tr3 = (low_prices - close_prices.shift()).abs()
+    tr1 = high_1h - low_1h
+    tr2 = (high_1h - close_1h.shift()).abs()
+    tr3 = (low_1h - close_1h.shift()).abs()
     true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    df["ATR"] = true_range.rolling(window=14).mean()
+    df_1h["ATR"] = true_range.rolling(window=14).mean()
 
-    # Calculate EMA 20 & EMA 50 Trend Confluence
-    df["EMA_20"] = close_prices.ewm(span=20, adjust=False).mean()
-    df["EMA_50"] = close_prices.ewm(span=50, adjust=False).mean()
+    df_1h["EMA_20"] = close_1h.ewm(span=20, adjust=False).mean()
+    df_1h["EMA_50"] = close_1h.ewm(span=50, adjust=False).mean()
 
-    latest = df.iloc[-1]
-    current_price = float(latest["Close"])
-    rsi_val = float(latest["RSI"]) if not pd.isna(latest["RSI"]) else 50.0
-    atr_val = float(latest["ATR"]) if not pd.isna(latest["ATR"]) else 15.0
-    ema_20 = (
-        float(latest["EMA_20"]) if not pd.isna(latest["EMA_20"]) else current_price
+    # --- Daily Technical Calculations ---
+    close_1d = df_1d["Close"].astype(float)
+    df_1d["EMA_20"] = close_1d.ewm(span=20, adjust=False).mean()
+    df_1d["EMA_50"] = close_1d.ewm(span=50, adjust=False).mean()
+
+    # --- Latest Values ---
+    latest_1h = df_1h.iloc[-1]
+    latest_1d = df_1d.iloc[-1]
+
+    current_price = float(latest_1h["Close"])
+    rsi_val = (
+        float(latest_1h["RSI"]) if not pd.isna(latest_1h["RSI"]) else 50.0
     )
-    ema_50 = (
-        float(latest["EMA_50"]) if not pd.isna(latest["EMA_50"]) else current_price
+    atr_val = (
+        float(latest_1h["ATR"]) if not pd.isna(latest_1h["ATR"]) else 15.0
     )
 
-    # Confluence Signal Logic
-    if ema_20 > ema_50:
-      trend = "Bullish"
+    h1_ema_20 = float(latest_1h["EMA_20"])
+    h1_ema_50 = float(latest_1h["EMA_50"])
+    daily_ema_20 = float(latest_1d["EMA_20"])
+    daily_ema_50 = float(latest_1d["EMA_50"])
+
+    # --- Multi-Timeframe Bias Evaluation ---
+    daily_trend = "Bullish" if daily_ema_20 > daily_ema_50 else "Bearish"
+    h1_trend = "Bullish" if h1_ema_20 > h1_ema_50 else "Bearish"
+
+    # Confluence Decision Matrix
+    if daily_trend == "Bullish" and h1_trend == "Bullish":
+      trend = "Bullish (Multi-TF Confirmed)"
       signal = "BUY (LONG)"
       stop_loss = round(current_price - (atr_val * 1.5), 2)
       tp_1 = round(current_price + (atr_val * 2.0), 2)
       tp_2 = round(current_price + (atr_val * 3.5), 2)
-    else:
-      trend = "Bearish"
+    elif daily_trend == "Bearish" and h1_trend == "Bearish":
+      trend = "Bearish (Multi-TF Confirmed)"
       signal = "SELL (SHORT)"
       stop_loss = round(current_price + (atr_val * 1.5), 2)
       tp_1 = round(current_price - (atr_val * 2.0), 2)
       tp_2 = round(current_price - (atr_val * 3.5), 2)
+    else:
+      # Divergence handling: Follow macro daily trend with tactical caution
+      trend = f"Divergence (Daily: {daily_trend} / 1H: {h1_trend})"
+      signal = (
+          "BUY (LONG) - Macro Trend"
+          if daily_trend == "Bullish"
+          else "SELL (SHORT) - Macro Trend"
+      )
+      if daily_trend == "Bullish":
+        stop_loss = round(current_price - (atr_val * 1.5), 2)
+        tp_1 = round(current_price + (atr_val * 2.0), 2)
+        tp_2 = round(current_price + (atr_val * 3.5), 2)
+      else:
+        stop_loss = round(current_price + (atr_val * 1.5), 2)
+        tp_1 = round(current_price - (atr_val * 2.0), 2)
+        tp_2 = round(current_price - (atr_val * 3.5), 2)
 
     rsi_condition = (
         "Overbought"
@@ -154,11 +192,11 @@ def generate_ai_gold_signal():
         else ("Oversold" if rsi_val < 30 else "Neutral")
     )
 
-    ai_commentary = f"Quantitative Engine Active (EMA Confluence): Gold is showing a {trend.lower()} bias at ${current_price:.2f} with RSI at {rsi_val:.2f} ({rsi_condition}). EMA 20 is at ${ema_20:.2f} and EMA 50 is at ${ema_50:.2f}. Risk management locked in with a {signal} setup."
+    ai_commentary = f"Multi-Timeframe Engine Active: Daily Trend is {daily_trend} and 1H Trend is {h1_trend}. Gold is trading at ${current_price:.2f} with RSI at {rsi_val:.2f} ({rsi_condition}). Risk management locked in with a {signal} setup."
 
     return {
         "asset": "Gold (XAU/USD)",
-        "timestamp": str(df.index[-1]),
+        "timestamp": str(df_1h.index[-1]),
         "current_price": round(current_price, 2),
         "ai_market_insight": ai_commentary,
         "signal_setup": {
@@ -173,8 +211,8 @@ def generate_ai_gold_signal():
             "rsi_14": round(rsi_val, 2),
             "rsi_condition": rsi_condition,
             "atr_volatility": round(atr_val, 2),
-            "ema_20": round(ema_20, 2),
-            "ema_50": round(ema_50, 2),
+            "daily_trend": daily_trend,
+            "h1_trend": h1_trend,
         },
     }
 
