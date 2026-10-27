@@ -1,3 +1,4 @@
+from fastapi import FastAPI, HTTPException, Request
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
@@ -61,10 +62,45 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-GOLD_TICKER = "GC=F" 
+# Multi-Asset Configuration
+TRACKED_ASSETS = [
+    {"symbol": "GC=F", "name": "Gold (XAU/USD)"},
+    {"symbol": "BTC-USD", "name": "Bitcoin (BTC/USD)"},
+]
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "your-fallback-key-here"))
+
+async def autonomous_signal_scheduler():
+  """Background worker that loops through multiple assets automatically"""
+  await asyncio.sleep(15)
+
+  while True:
+    for asset in TRACKED_ASSETS:
+      try:
+        print(f"[AUTONOMOUS ENGINE] Checking market for {asset['name']}...")
+        signal_data = generate_quant_signal(asset["symbol"], asset["name"])
+
+        tech = signal_data["technical_indicators"]
+        setup = signal_data["signal_setup"]
+
+        message = (
+            f"🤖 *AUTONOMOUS {asset['name'].upper()} ALERT* 🤖\n\n"
+            f"📌 *Action:* {setup['action']}\n"
+            f"📊 *Market Bias:* {setup['market_bias']}\n"
+            f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
+            f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
+            f"🎯 *Take Profit 1:* ${setup['take_profit_1']:,.2f}\n"
+            f"🎯 *Take Profit 2:* ${setup['take_profit_2']:,.2f}\n\n"
+            f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
+            f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
+            f"💬 *Insight:* {signal_data['ai_market_insight']}"
+        )
+        send_telegram_alert(message)
+        await asyncio.sleep(5)
+      except Exception as e:
+        print(f"[AUTONOMOUS ENGINE ERROR for {asset['symbol']}]: {e}")
+
+    # Sleep for 5 minutes before the next multi-asset scan loop
+    await asyncio.sleep(300)
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = "8802295558:AAFNqNY5utWXzqFXuFnQthXiZwZacqz0rfY"
@@ -84,33 +120,24 @@ def send_telegram_alert(message: str):
     response = requests.post(url, json=payload)
     return response.json()
 
-@app.get("/")
-def home():
-    return {"status": "online", "message": "Autonomous Gold AI Backend is running. Visit /dashboard."}
-
-@app.get("/ai-signal")
-def generate_ai_gold_signal():
+def generate_quant_signal(ticker: str, asset_name: str):
   try:
-    # 1. Fetch 15-Minute Data (Fast Tactical Execution to match M5 charts)
-    df_15m = yf.download(
-        GOLD_TICKER, period="5d", interval="15m", progress=False
-    )
+    # 1. Fetch 15-Minute Tactical Data
+    df_15m = yf.download(ticker, period="5d", interval="15m", progress=False)
     if df_15m.empty:
       raise HTTPException(
-          status_code=404, detail="No 15M market data returned for Gold."
+          status_code=404, detail=f"No 15M market data returned for {ticker}."
       )
 
     if isinstance(df_15m.columns, pd.MultiIndex):
       df_15m.columns = df_15m.columns.get_level_values(0)
 
-    # 2. Fetch Daily Data (Macro Trend Filter)
-    df_1d = yf.download(
-        GOLD_TICKER, period="6mo", interval="1d", progress=False
-    )
+    # 2. Fetch Daily Macro Data
+    df_1d = yf.download(ticker, period="6mo", interval="1d", progress=False)
     if isinstance(df_1d.columns, pd.MultiIndex):
       df_1d.columns = df_1d.columns.get_level_values(0)
 
-    # --- 15M Technical Calculations ---
+    # --- Technical Calculations ---
     close_15m = df_15m["Close"].astype(float)
     high_15m = df_15m["High"].astype(float)
     low_15m = df_15m["Low"].astype(float)
@@ -130,12 +157,10 @@ def generate_ai_gold_signal():
     df_15m["EMA_20"] = close_15m.ewm(span=20, adjust=False).mean()
     df_15m["EMA_50"] = close_15m.ewm(span=50, adjust=False).mean()
 
-    # --- Daily Technical Calculations ---
     close_1d = df_1d["Close"].astype(float)
     df_1d["EMA_20"] = close_1d.ewm(span=20, adjust=False).mean()
     df_1d["EMA_50"] = close_1d.ewm(span=50, adjust=False).mean()
 
-    # --- Latest Values ---
     latest_15m = df_15m.iloc[-1]
     latest_1d = df_1d.iloc[-1]
 
@@ -152,23 +177,21 @@ def generate_ai_gold_signal():
     daily_ema_20 = float(latest_1d["EMA_20"])
     daily_ema_50 = float(latest_1d["EMA_50"])
 
-    # --- Multi-Timeframe Bias Evaluation ---
     daily_trend = "Bullish" if daily_ema_20 > daily_ema_50 else "Bearish"
     m15_trend = "Bullish" if m15_ema_20 > m15_ema_50 else "Bearish"
 
-    # Confluence Decision Matrix
     if daily_trend == "Bullish" and m15_trend == "Bullish":
       trend = "Bullish (Multi-TF Confirmed)"
       signal = "BUY (LONG)"
-      stop_loss = round(current_price - (atr_val * 1.5), 2)
-      tp_1 = round(current_price + (atr_val * 2.0), 2)
-      tp_2 = round(current_price + (atr_val * 3.5), 2)
+      stop_loss = round(current_price - (atr_val * 1.0), 2)
+      tp_1 = round(current_price + (atr_val * 1.5), 2)
+      tp_2 = round(current_price + (atr_val * 2.5), 2)
     elif daily_trend == "Bearish" and m15_trend == "Bearish":
       trend = "Bearish (Multi-TF Confirmed)"
       signal = "SELL (SHORT)"
-      stop_loss = round(current_price + (atr_val * 1.5), 2)
-      tp_1 = round(current_price - (atr_val * 2.0), 2)
-      tp_2 = round(current_price - (atr_val * 3.5), 2)
+      stop_loss = round(current_price + (atr_val * 1.0), 2)
+      tp_1 = round(current_price - (atr_val * 1.5), 2)
+      tp_2 = round(current_price - (atr_val * 2.5), 2)
     else:
       trend = f"Divergence (Daily: {daily_trend} / 15M: {m15_trend})"
       signal = (
@@ -177,13 +200,13 @@ def generate_ai_gold_signal():
           else "SELL (SHORT) - Macro Trend"
       )
       if daily_trend == "Bullish":
-        stop_loss = round(current_price - (atr_val * 1.5), 2)
-        tp_1 = round(current_price + (atr_val * 2.0), 2)
-        tp_2 = round(current_price + (atr_val * 3.5), 2)
+        stop_loss = round(current_price - (atr_val * 1.0), 2)
+        tp_1 = round(current_price + (atr_val * 1.5), 2)
+        tp_2 = round(current_price + (atr_val * 2.5), 2)
       else:
-        stop_loss = round(current_price + (atr_val * 1.5), 2)
-        tp_1 = round(current_price - (atr_val * 2.0), 2)
-        tp_2 = round(current_price - (atr_val * 3.5), 2)
+        stop_loss = round(current_price + (atr_val * 1.0), 2)
+        tp_1 = round(current_price - (atr_val * 1.5), 2)
+        tp_2 = round(current_price - (atr_val * 2.5), 2)
 
     rsi_condition = (
         "Overbought"
@@ -191,10 +214,10 @@ def generate_ai_gold_signal():
         else ("Oversold" if rsi_val < 30 else "Neutral")
     )
 
-    ai_commentary = f"Fast Tactical Engine Active: Daily Trend is {daily_trend} and 15M Trend is {m15_trend}. Gold is trading at ${current_price:.2f} with RSI at {rsi_val:.2f} ({rsi_condition}). Risk management locked in with a {signal} setup."
+    ai_commentary = f"Multi-Asset Engine Active: Daily Trend is {daily_trend} and 15M Trend is {m15_trend}. {asset_name} is trading at ${current_price:,.2f} with RSI at {rsi_val:.2f} ({rsi_condition}). Risk management locked in with a {signal} setup."
 
     return {
-        "asset": "Gold (XAU/USD)",
+        "asset": asset_name,
         "timestamp": str(df_15m.index[-1]),
         "current_price": round(current_price, 2),
         "ai_market_insight": ai_commentary,
@@ -214,9 +237,13 @@ def generate_ai_gold_signal():
             "m15_trend": m15_trend,
         },
     }
-
   except Exception as e:
     raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ai-signal")
+def generate_ai_gold_signal():
+  return generate_quant_signal("GC=F", "Gold (XAU/USD)")
 
 @app.get("/send-telegram-signal")
 def trigger_telegram_signal():
@@ -418,54 +445,42 @@ def dashboard():
     </body>
     </html>
     """
-
 @app.post("/telegram-webhook")
 async def telegram_webhook(request: Request):
-  """Receives interactive commands (/signal, /status) directly from Telegram"""
-  try:
-    body = await request.json()
-    if "message" in body:
-      msg = body["message"]
-      chat_id = msg["chat"]["id"]
-      text = msg.get("text", "").strip().lower()
+  data = await request.json()
+  if "message" in data:
+    message = data["message"]
+    text = message.get("text", "").strip()
 
-      # Handle /signal command
-      if text.startswith("/signal"):
-        signal_data = generate_ai_gold_signal()
+    if text == "/signal":
+      for asset in TRACKED_ASSETS:
+        signal_data = generate_quant_signal(asset["symbol"], asset["name"])
         tech = signal_data["technical_indicators"]
         setup = signal_data["signal_setup"]
 
-        message = (
-            f"🤖 *ON-DEMAND XAU/USD SIGNAL* 🤖\n\n"
+        signal_message = (
+            f"📊 *ON-DEMAND {asset['name'].upper()} SIGNAL* 📊\n\n"
             f"📌 *Action:* {setup['action']}\n"
             f"📊 *Market Bias:* {setup['market_bias']}\n"
-            f"💰 *Entry Price:* ${signal_data['current_price']:.2f}\n\n"
-            f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']}\n"
-            f"🎯 *Take Profit 1:* ${setup['take_profit_1']}\n"
-            f"🎯 *Take Profit 2:* ${setup['take_profit_2']}\n\n"
+            f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
+            f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
+            f"🎯 *Take Profit 1:* ${signal_data['take_profit_1']:,.2f}\n"
+            f"🎯 *Take Profit 2:* ${signal_data['take_profit_2']:,.2f}\n\n"
             f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
-            f"⚡ *ATR Volatility:* {tech['atr_volatility']}\n\n"
+            f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
             f"💬 *Insight:* {signal_data['ai_market_insight']}"
         )
-        send_telegram_alert(message)
+        send_telegram_alert(signal_message)
+        await asyncio.sleep(1)
 
-      # Handle /status command
-      elif text.startswith("/status"):
-        status_message = (
-            f"🟢 *QUANT ENGINE STATUS* 🟢\n\n"
-            f"• *Server:* Online (Render Cloud)\n"
-            f"• *Polling Frequency:* Every 5 Minutes (300s)\n"
-            f"• *Execution Timeframe:* 15M Tactical / Daily Macro\n"
-            f"• *Active Asset:* Gold (XAU/USD)\n"
-            f"• *Risk Management:* 1.0x ATR Precision SL"
-        )
-        send_telegram_alert(status_message)
+    elif text == "/status":
+      status_message = (
+          "🟢 *QUANT ENGINE STATUS: ONLINE*\n\n"
+          "🚀 *Platform:* Render Cloud Infrastructure\n"
+          "⏱ *Polling Interval:* Every 5 Minutes\n"
+          "📈 *Tracked Assets:* Gold (XAU/USD) & Bitcoin (BTC/USD)\n"
+          "🤖 *Webhooks:* Active & Responsive"
+      )
+      send_telegram_alert(status_message)
 
-    return {"status": "success"}
-  except Exception as e:
-    print(f"[WEBHOOK ERROR]: {e}")
-    return {"status": "error", "detail": str(e)}
-
-
-
-
+  return {"status": "ok"}
