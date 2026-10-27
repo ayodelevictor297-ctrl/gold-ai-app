@@ -418,3 +418,54 @@ def dashboard():
     </body>
     </html>
     """
+
+@app.post("/telegram-webhook")
+async def telegram_webhook(request: Request):
+  """Receives interactive commands (/signal, /status) directly from Telegram"""
+  try:
+    body = await request.json()
+    if "message" in body:
+      msg = body["message"]
+      chat_id = msg["chat"]["id"]
+      text = msg.get("text", "").strip().lower()
+
+      # Handle /signal command
+      if text.startswith("/signal"):
+        signal_data = generate_ai_gold_signal()
+        tech = signal_data["technical_indicators"]
+        setup = signal_data["signal_setup"]
+
+        message = (
+            f"🤖 *ON-DEMAND XAU/USD SIGNAL* 🤖\n\n"
+            f"📌 *Action:* {setup['action']}\n"
+            f"📊 *Market Bias:* {setup['market_bias']}\n"
+            f"💰 *Entry Price:* ${signal_data['current_price']:.2f}\n\n"
+            f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']}\n"
+            f"🎯 *Take Profit 1:* ${setup['take_profit_1']}\n"
+            f"🎯 *Take Profit 2:* ${setup['take_profit_2']}\n\n"
+            f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
+            f"⚡ *ATR Volatility:* {tech['atr_volatility']}\n\n"
+            f"💬 *Insight:* {signal_data['ai_market_insight']}"
+        )
+        send_telegram_alert(message)
+
+      # Handle /status command
+      elif text.startswith("/status"):
+        status_message = (
+            f"🟢 *QUANT ENGINE STATUS* 🟢\n\n"
+            f"• *Server:* Online (Render Cloud)\n"
+            f"• *Polling Frequency:* Every 5 Minutes (300s)\n"
+            f"• *Execution Timeframe:* 15M Tactical / Daily Macro\n"
+            f"• *Active Asset:* Gold (XAU/USD)\n"
+            f"• *Risk Management:* 1.0x ATR Precision SL"
+        )
+        send_telegram_alert(status_message)
+
+    return {"status": "success"}
+  except Exception as e:
+    print(f"[WEBHOOK ERROR]: {e}")
+    return {"status": "error", "detail": str(e)}
+
+
+
+
