@@ -4,6 +4,7 @@ import pandas as pd
 import requests
 import yfinance
 from fastapi import FastAPI, HTTPException, Request
+from openai import OpenAI
 
 app = FastAPI()
 
@@ -24,6 +25,33 @@ def send_telegram_alert(message: str):
   }
   response = requests.post(url, json=payload)
   return response.json()
+
+
+def get_ai_insight(
+    asset_name, current_price, rsi_val, daily_trend, m15_trend, action
+):
+  api_key = os.getenv("OPENAI_API_KEY")
+  if not api_key:
+    return f"Institutional Confluence Engine: {asset_name} is trading at ${current_price:,.2f} with Daily trend as {daily_trend} and 15M tactical trend as {m15_trend}. Action locked: {action}."
+
+  try:
+    client = OpenAI(api_key=api_key)
+    prompt = (
+        f"You are an elite quantitative trading AI assistant. Write a short,"
+        f" punchy, professional 2-sentence market insight for {asset_name}"
+        f" trading at ${current_price:,.2f}. The Daily macro trend is"
+        f" {daily_trend}, the 15M tactical trend is {m15_trend}, RSI is"
+        f" {rsi_val:.2f}, and the validated signal action is {action}."
+        f" Speak like a seasoned head quant desk analyst."
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=100,
+    )
+    return response.choices[0].message.content.strip()
+  except Exception as e:
+    return f"Engine Filter Active: Daily is {daily_trend}, 15M is {m15_trend}. {asset_name} at ${current_price:,.2f}."
 
 
 def generate_quant_signal(ticker: str, asset_name: str):
@@ -116,7 +144,9 @@ def generate_quant_signal(ticker: str, asset_name: str):
         else ("Oversold" if rsi_val < 30 else "Neutral")
     )
 
-    ai_commentary = f"Engine Filter Active: Daily is {daily_trend}, 15M is {m15_trend}. {asset_name} is trading at ${current_price:,.2f} with RSI at {rsi_val:.2f} ({rsi_condition})."
+    ai_commentary = get_ai_insight(
+        asset_name, current_price, rsi_val, daily_trend, m15_trend, signal
+    )
 
     return {
         "asset": asset_name,
@@ -158,11 +188,11 @@ async def autonomous_signal_scheduler():
               f"📊 *Market Bias:* {setup['market_bias']}\n"
               f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
               f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
-              f"🎯 *Take Profit 1:* ${signal_data['take_profit_1']:,.2f}\n"
-              f"🎯 *Take Profit 2:* ${signal_data['take_profit_2']:,.2f}\n\n"
+              f"🎯 *Take Profit 1:* ${setup['take_profit_1']:,.2f}\n"
+              f"🎯 *Take Profit 2:* ${setup['take_profit_2']:,.2f}\n\n"
               f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
               f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
-              f"💬 *Insight:* {signal_data['ai_market_insight']}"
+              f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
           )
           send_telegram_alert(message)
           await asyncio.sleep(3)
@@ -202,7 +232,7 @@ async def telegram_webhook(request: Request):
             f"🎯 *Take Profit 2:* ${signal_data['take_profit_2']:,.2f}\n\n"
             f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
             f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
-            f"💬 *Insight:* {signal_data['ai_market_insight']}"
+            f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
         )
         send_telegram_alert(signal_message)
         await asyncio.sleep(1)
@@ -213,7 +243,7 @@ async def telegram_webhook(request: Request):
           "🚀 *Platform:* Render Cloud Infrastructure\n"
           "⏱ *Polling Interval:* Every 3 Hours\n"
           "📈 *Tracked Assets:* Gold (XAU/USD) & Bitcoin (BTC/USD)\n"
-          "🤖 *Webhooks:* Active & Responsive"
+          "🤖 *Webhooks & AI Desk:* Active & Responsive"
       )
       send_telegram_alert(status_message)
 
