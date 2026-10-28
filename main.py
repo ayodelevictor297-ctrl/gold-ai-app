@@ -100,7 +100,7 @@ async def autonomous_signal_scheduler():
         print(f"[AUTONOMOUS ENGINE ERROR for {asset['symbol']}]: {e}")
 
     # Sleep for 5 minutes before the next multi-asset scan loop
-    await asyncio.sleep(300)
+    await asyncio.sleep(10800)
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = "8802295558:AAFNqNY5utWXzqFXuFnQthXiZwZacqz0rfY"
