@@ -211,40 +211,48 @@ async def startup_event():
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(request: Request):
-  data = await request.json()
-  if "message" in data:
-    message = data["message"]
-    text = message.get("text", "").strip()
+  try:
+    data = await request.json()
+    if "message" in data:
+      message = data["message"]
+      text = message.get("text", "").strip()
 
-    if text == "/signal":
-      for asset in TRACKED_ASSETS:
-        signal_data = generate_quant_signal(asset["symbol"], asset["name"])
-        tech = signal_data["technical_indicators"]
-        setup = signal_data["signal_setup"]
+      if text == "/signal":
+        for asset in TRACKED_ASSETS:
+          try:
+            signal_data = generate_quant_signal(asset["symbol"], asset["name"])
+            tech = signal_data["technical_indicators"]
+            setup = signal_data["signal_setup"]
 
-        signal_message = (
-            f"📊 *ON-DEMAND {asset['name'].upper()} SIGNAL* 📊\n\n"
-            f"📌 *Action:* {setup['action']}\n"
-            f"📊 *Market Bias:* {setup['market_bias']}\n"
-            f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
-            f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
-            f"🎯 *Take Profit 1:* ${signal_data['take_profit_1']:,.2f}\n"
-            f"🎯 *Take Profit 2:* ${signal_data['take_profit_2']:,.2f}\n\n"
-            f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
-            f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
-            f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
+            signal_message = (
+                f"📊 *ON-DEMAND {asset['name'].upper()} SIGNAL* 📊\n\n"
+                f"📌 *Action:* {setup['action']}\n"
+                f"📊 *Market Bias:* {setup['market_bias']}\n"
+                f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
+                f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
+                f"🎯 *Take Profit 1:* ${setup['take_profit_1']:,.2f}\n"
+                f"🎯 *Take Profit 2:* ${setup['take_profit_2']:,.2f}\n\n"
+                f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
+                f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
+                f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
+            )
+            send_telegram_alert(signal_message)
+          except Exception as inner_e:
+            send_telegram_alert(
+                f"⚠️ Error processing {asset['name']}: {str(inner_e)}"
+            )
+          await asyncio.sleep(1)
+
+      elif text == "/status":
+        status_message = (
+            "🟢 *QUANT ENGINE STATUS: ONLINE*\n\n"
+            "🚀 *Platform:* Render Cloud Infrastructure\n"
+            "⏱ *Polling Interval:* Every 3 Hours\n"
+            "📈 *Tracked Assets:* Gold (XAU/USD) & Bitcoin (BTC/USD)\n"
+            "🤖 *Webhooks & AI Desk:* Active & Responsive"
         )
-        send_telegram_alert(signal_message)
-        await asyncio.sleep(1)
-
-    elif text == "/status":
-      status_message = (
-          "🟢 *QUANT ENGINE STATUS: ONLINE*\n\n"
-          "🚀 *Platform:* Render Cloud Infrastructure\n"
-          "⏱ *Polling Interval:* Every 3 Hours\n"
-          "📈 *Tracked Assets:* Gold (XAU/USD) & Bitcoin (BTC/USD)\n"
-          "🤖 *Webhooks & AI Desk:* Active & Responsive"
-      )
-      send_telegram_alert(status_message)
+        send_telegram_alert(status_message)
+  except Exception as e:
+    print(f"WEBHOOK ERROR: {e}")
 
   return {"status": "ok"}
