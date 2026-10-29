@@ -3,7 +3,8 @@ import os
 import pandas as pd
 import requests
 import yfinance as yf
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi.responses import HTMLResponse
 from openai import OpenAI
 
 app = FastAPI(title="Quant Trading Engine")
@@ -12,15 +13,6 @@ TRACKED_ASSETS = [
     {"symbol": "GC=F", "name": "Gold"},
     {"symbol": "BTC-USD", "name": "Bitcoin"},
 ]
-
-
-@app.get("/")
-def home_root():
-  return {
-      "status": "online",
-      "engine": "Gold & Bitcoin Quantitative AI Bot",
-      "webhook": "Active",
-  }
 
 
 def send_telegram_alert(message: str, chat_id: str = None):
@@ -181,6 +173,106 @@ def generate_quant_signal(ticker: str, asset_name: str):
     return None
 
 
+@app.get("/", response_class=HTMLResponse)
+def web_dashboard():
+  signals_html = ""
+  for asset in TRACKED_ASSETS:
+    data = generate_quant_signal(asset["symbol"], asset["name"])
+    if not data:
+      continue
+    setup = data["signal_setup"]
+    tech = data["technical_indicators"]
+    badge_color = (
+        "#22c55e"
+        if "BUY" in setup["action"]
+        else ("#ef4444" if "SELL" in setup["action"] else "#eab308")
+    )
+
+    signals_html += f"""
+        <div class="card">
+            <div class="card-header">
+                <h2>{data['asset']}</h2>
+                <span class="badge" style="background: {badge_color};">{setup['action']}</span>
+            </div>
+            <div class="price">${data['current_price']:,.2f}</div>
+            <p><strong>Bias:</strong> {setup['market_bias']}</p>
+            <div class="levels">
+                <div><span>SL:</span> ${setup['signal_setup']['stop_loss_sl']:,.2f}</div>
+                <div><span>TP1:</span> ${setup['signal_setup']['take_profit_1']:,.2f}</div>
+                <div><span>TP2:</span> ${setup['signal_setup']['take_profit_2']:,.2f}</div>
+            </div>
+            <p class="insight">💬 {data['ai_market_insight']}</p>
+        </div>
+        """
+
+  html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Institutional Quant Engine</title>
+        <style>
+            body {{ background-color: #0f172a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }}
+            .container {{ max-width: 600px; margin: 0 auto; }}
+            h1 {{ text-align: center; color: #38bdf8; font-size: 24px; margin-bottom: 5px; }}
+            p.subtitle {{ text-align: center; color: #94a3b8; margin-top: 0; font-size: 14px; }}
+            .btn {{ display: block; width: 100%; background: #2563eb; color: white; border: none; padding: 12px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; text-align: center; text-decoration: none; margin: 20px 0; transition: background 0.2s; }}
+            .btn:hover {{ background: #1d4ed8; }}
+            .card {{ background: #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 16px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }}
+            .card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
+            .card-header h2 {{ margin: 0; font-size: 18px; }}
+            .badge {{ padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold; color: white; }}
+            .price {{ font-size: 22px; font-weight: bold; color: #f1f5f9; margin-bottom: 8px; }}
+            .levels {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; background: #0f172a; padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 13px; text-align: center; }}
+            .levels span {{ display: block; color: #94a3b8; font-size: 11px; }}
+            .insight {{ font-size: 13px; color: #cbd5e1; font-style: italic; margin-top: 10px; border-top: 1px solid #334155; padding-top: 8px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>⚡ Institutional Quant AI Desk</h1>
+            <p class="subtitle">Live Multi-Timeframe Confluence Engine for Gold & Bitcoin</p>
+            <a href="/trigger-broadcast" class="btn">🚀 Broadcast Signals to Telegram Now</a>
+            {signals_html}
+        </div>
+    </body>
+    </html>
+    """
+  return HTMLResponse(content=html_content)
+
+
+@app.get("/trigger-broadcast")
+def trigger_broadcast():
+  try:
+    for asset in TRACKED_ASSETS:
+      signal_data = generate_quant_signal(asset["symbol"], asset["name"])
+      if not signal_data:
+        continue
+      tech = signal_data["technical_indicators"]
+      setup = signal_data["signal_setup"]
+
+      signal_message = (
+          f"📊 *LIVE BROWSER BROADCAST: {asset['name'].upper()}* 📊\n\n"
+          f"📌 *Action:* {setup['action']}\n"
+          f"📊 *Market Bias:* {setup['market_bias']}\n"
+          f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
+          f"🛑 *Stop Loss (SL):* ${setup['signal_setup']['stop_loss_sl']:,.2f}\n"
+          f"🎯 *Take Profit 1:* ${signal_data['signal_setup']['take_profit_1']:,.2f}\n"
+          f"🎯 *Take Profit 2:* ${signal_data['signal_setup']['take_profit_2']:,.2f}\n\n"
+          f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
+          f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
+          f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
+      )
+      send_telegram_alert(signal_message)
+    return HTMLResponse(
+        content="<h3>✅ Signals successfully broadcasted to your Telegram! <a"
+        " href='/'>Back to Dashboard</a></h3>"
+    )
+  except Exception as e:
+    return HTMLResponse(content=f"<h3>❌ Error: {str(e)}</h3>")
+
+
 async def process_signal_background(chat_id: str):
   try:
     for asset in TRACKED_ASSETS:
@@ -215,7 +307,6 @@ async def process_signal_background(chat_id: str):
 async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
   try:
     data = await request.json()
-    print("Received Telegram Webhook Data:", data)
     if "message" in data:
       message = data["message"]
       text = message.get("text", "").strip()
@@ -234,7 +325,7 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
         status_message = (
             "🟢 *QUANT ENGINE STATUS: ONLINE*\n\n"
             "🚀 *Platform:* Render Cloud Infrastructure\n"
-            "⏱ *Polling Interval:* Autonomous Worker Active\n"
+            "⏱ *Polling Interval:* Webhooks & Dashboard Active\n"
             "📈 *Tracked Assets:* Gold (XAU/USD) & Bitcoin (BTC/USD)\n"
             "🤖 *Webhooks & AI Desk:* Active & Responsive"
         )
