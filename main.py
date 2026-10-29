@@ -205,9 +205,9 @@ def web_dashboard():
                 <div class="price">${data['current_price']:,.2f}</div>
                 <p><strong>Bias:</strong> {setup['market_bias']}</p>
                 <div class="levels">
-                    <div><span>SL:</span> ${setup['signal_setup']['stop_loss_sl']:,.2f}</div>
-                    <div><span>TP1:</span> ${setup['signal_setup']['take_profit_1']:,.2f}</div>
-                    <div><span>TP2:</span> ${setup['signal_setup']['take_profit_2']:,.2f}</div>
+                    <div><span>SL:</span> ${setup['stop_loss_sl']:,.2f}</div>
+                    <div><span>TP1:</span> ${setup['take_profit_1']:,.2f}</div>
+                    <div><span>TP2:</span> ${setup['take_profit_2']:,.2f}</div>
                 </div>
                 <p class="insight">💬 {data['ai_market_insight']}</p>
             </div>
@@ -272,9 +272,9 @@ def trigger_broadcast():
           f"📌 *Action:* {setup['action']}\n"
           f"📊 *Market Bias:* {setup['market_bias']}\n"
           f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
-          f"🛑 *Stop Loss (SL):* ${setup['signal_setup']['stop_loss_sl']:,.2f}\n"
-          f"🎯 *Take Profit 1:* ${setup['signal_setup']['take_profit_1']:,.2f}\n"
-          f"🎯 *Take Profit 2:* ${setup['signal_setup']['take_profit_2']:,.2f}\n\n"
+          f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
+          f"🎯 *Take Profit 1:* ${setup['take_profit_1']:,.2f}\n"
+          f"🎯 *Take Profit 2:* ${setup['take_profit_2']:,.2f}\n\n"
           f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
           f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
           f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
@@ -303,9 +303,9 @@ async def process_signal_background(chat_id: str):
           f"📌 *Action:* {setup['action']}\n"
           f"📊 *Market Bias:* {setup['market_bias']}\n"
           f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
-          f"🛑 *Stop Loss (SL):* ${setup['signal_setup']['stop_loss_sl']:,.2f}\n"
-          f"🎯 *Take Profit 1:* ${setup['signal_setup']['take_profit_1']:,.2f}\n"
-          f"🎯 *Take Profit 2:* ${setup['signal_setup']['take_profit_2']:,.2f}\n\n"
+          f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
+          f"🎯 *Take Profit 1:* ${setup['take_profit_1']:,.2f}\n"
+          f"🎯 *Take Profit 2:* ${setup['take_profit_2']:,.2f}\n\n"
           f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
           f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
           f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
