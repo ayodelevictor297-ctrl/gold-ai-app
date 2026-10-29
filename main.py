@@ -6,7 +6,7 @@ import yfinance as yf
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from openai import OpenAI
 
-app = FastAPI()
+app = FastAPI(title="Quant Trading Engine")
 
 TRACKED_ASSETS = [
     {"symbol": "GC=F", "name": "Gold"},
@@ -14,17 +14,34 @@ TRACKED_ASSETS = [
 ]
 
 
-def send_telegram_alert(message: str):
-  TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-  TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-  url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+@app.get("/")
+def home_root():
+  return {
+      "status": "online",
+      "engine": "Gold & Bitcoin Quantitative AI Bot",
+      "webhook": "Active",
+  }
+
+
+def send_telegram_alert(message: str, chat_id: str = None):
+  token = os.getenv("TELEGRAM_BOT_TOKEN")
+  target_chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
+
+  if not token or not target_chat_id:
+    print("Error: Missing Telegram token or chat ID.")
+    return
+
+  url = f"https://api.telegram.org/bot{token}/sendMessage"
   payload = {
-      "chat_id": TELEGRAM_CHAT_ID,
+      "chat_id": target_chat_id,
       "text": message,
       "parse_mode": "Markdown",
   }
-  response = requests.post(url, json=payload)
-  return response.json()
+  try:
+    res = requests.post(url, json=payload, timeout=10)
+    print("Telegram Response:", res.json())
+  except Exception as e:
+    print("Failed to send Telegram message:", e)
 
 
 def get_ai_insight(
@@ -32,7 +49,7 @@ def get_ai_insight(
 ):
   api_key = os.getenv("OPENAI_API_KEY")
   if not api_key:
-    return f"Institutional Confluence Engine: {asset_name} is trading at ${current_price:,.2f} with Daily trend as {daily_trend} and 15M tactical trend as {m15_trend}. Action locked: {action}."
+    return f"Institutional Confluence Engine: {asset_name} is trading at ${current_price:,.2f} with Daily trend as {daily_trend} and 15M trend as {m15_trend}."
 
   try:
     client = OpenAI(api_key=api_key)
@@ -42,7 +59,6 @@ def get_ai_insight(
         f" trading at ${current_price:,.2f}. The Daily macro trend is"
         f" {daily_trend}, the 15M tactical trend is {m15_trend}, RSI is"
         f" {rsi_val:.2f}, and the validated signal action is {action}."
-        f" Speak like a seasoned head quant desk analyst."
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -56,17 +72,13 @@ def get_ai_insight(
 
 def generate_quant_signal(ticker: str, asset_name: str):
   try:
-    # 1. Fetch 15-Minute Tactical Data
     df_15m = yf.download(ticker, period="5d", interval="15m", progress=False)
     if df_15m.empty:
-      raise HTTPException(
-          status_code=404, detail=f"No 15M market data returned for {ticker}."
-      )
+      return None
 
     if isinstance(df_15m.columns, pd.MultiIndex):
       df_15m.columns = df_15m.columns.get_level_values(0)
 
-    # 2. Fetch Daily Macro Data
     df_1d = yf.download(ticker, period="6mo", interval="1d", progress=False)
     if isinstance(df_1d.columns, pd.MultiIndex):
       df_1d.columns = df_1d.columns.get_level_values(0)
@@ -75,7 +87,6 @@ def generate_quant_signal(ticker: str, asset_name: str):
     high_15m = df_15m["High"].astype(float)
     low_15m = df_15m["Low"].astype(float)
 
-    # Technical Indicators (RSI & ATR)
     delta = close_15m.diff()
     gain = delta.where(delta > 0, 0).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -117,7 +128,6 @@ def generate_quant_signal(ticker: str, asset_name: str):
         else "Bearish"
     )
 
-    # STRICT CONFLUENCE FILTER
     if daily_trend == "Bullish" and m15_trend == "Bullish":
       trend = "Bullish (Multi-TF Confirmed)"
       signal = "BUY (LONG)"
@@ -167,14 +177,17 @@ def generate_quant_signal(ticker: str, asset_name: str):
         },
     }
   except Exception as e:
-    raise HTTPException(status_code=500, detail=str(e))
+    print(f"Error generating signal for {ticker}: {e}")
+    return None
 
 
-async def process_signal_background():
-  """Runs signal generation in the background so Telegram webhook never times out"""
+async def process_signal_background(chat_id: str):
   try:
     for asset in TRACKED_ASSETS:
       signal_data = generate_quant_signal(asset["symbol"], asset["name"])
+      if not signal_data:
+        continue
+
       tech = signal_data["technical_indicators"]
       setup = signal_data["signal_setup"]
 
@@ -184,78 +197,48 @@ async def process_signal_background():
           f"📊 *Market Bias:* {setup['market_bias']}\n"
           f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
           f"🛑 *Stop Loss (SL):* ${setup['signal_setup']['stop_loss_sl']:,.2f}\n"
-          f"🎯 *Take Profit 1:* ${signal_data['signal_setup']['take_profit_1']:,.2f}\n"
-          f"🎯 *Take Profit 2:* ${signal_data['signal_setup']['take_profit_2']:,.2f}\n\n"
+          f"🎯 *Take Profit 1:* ${setup['signal_setup']['take_profit_1']:,.2f}\n"
+          f"🎯 *Take Profit 2:* ${setup['signal_setup']['take_profit_2']:,.2f}\n\n"
           f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
           f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
           f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
       )
-      send_telegram_alert(signal_message)
+      send_telegram_alert(signal_message, chat_id=chat_id)
       await asyncio.sleep(1)
   except Exception as e:
-    send_telegram_alert(f"⚠️ Background Processing Error: {str(e)}")
-
-
-async def autonomous_signal_scheduler():
-  await asyncio.sleep(10)
-  while True:
-    try:
-      for asset in TRACKED_ASSETS:
-        signal_data = generate_quant_signal(asset["symbol"], asset["name"])
-        if signal_data["valid_signal"]:
-          tech = signal_data["technical_indicators"]
-          setup = signal_data["signal_setup"]
-
-          message = (
-              f"🤖 *AUTONOMOUS {asset['name'].upper()} ALERT* 🤖\n\n"
-              f"📌 *Action:* {setup['action']}\n"
-              f"📊 *Market Bias:* {setup['market_bias']}\n"
-              f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
-              f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
-              f"🎯 *Take Profit 1:* ${setup['take_profit_1']:,.2f}\n"
-              f"🎯 *Take Profit 2:* ${setup['take_profit_2']:,.2f}\n\n"
-              f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
-              f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
-              f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
-          )
-          send_telegram_alert(message)
-          await asyncio.sleep(3)
-    except Exception as e:
-      print(f"AUTONOMOUS ENGINE ERROR: {e}")
-
-    # Sleep for 3 hours (10800 seconds)
-    await asyncio.sleep(10800)
-
-
-@app.on_event("startup")
-async def startup_event():
-  asyncio.create_task(autonomous_signal_scheduler())
+    send_telegram_alert(
+        f"⚠️ Background Processing Error: {str(e)}", chat_id=chat_id
+    )
 
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
   try:
     data = await request.json()
+    print("Received Telegram Webhook Data:", data)
     if "message" in data:
       message = data["message"]
       text = message.get("text", "").strip()
+      incoming_chat_id = str(message["chat"]["id"])
 
       if text == "/signal":
-        # Dispatch to background task so Telegram webhook returns 200 OK instantly!
-        background_tasks.add_task(process_signal_background)
         send_telegram_alert(
-            "⏳ *Generating live quant signals for Gold & Bitcoin...*"
+            "⏳ *Generating live quant signals for Gold & Bitcoin...*",
+            chat_id=incoming_chat_id,
+        )
+        background_tasks.add_task(
+            process_signal_background, chat_id=incoming_chat_id
         )
 
       elif text == "/status":
         status_message = (
             "🟢 *QUANT ENGINE STATUS: ONLINE*\n\n"
             "🚀 *Platform:* Render Cloud Infrastructure\n"
-            "⏱ *Polling Interval:* Every 3 Hours\n"
+            "⏱ *Polling Interval:* Autonomous Worker Active\n"
             "📈 *Tracked Assets:* Gold (XAU/USD) & Bitcoin (BTC/USD)\n"
             "🤖 *Webhooks & AI Desk:* Active & Responsive"
         )
-        send_telegram_alert(status_message)
+        send_telegram_alert(status_message, chat_id=incoming_chat_id)
   except Exception as e:
     print(f"WEBHOOK ERROR: {e}")
 
