@@ -65,13 +65,16 @@ def get_ai_insight(
 def generate_quant_signal(ticker: str, asset_name: str):
   try:
     df_15m = yf.download(ticker, period="5d", interval="15m", progress=False)
-    if df_15m.empty:
+    if df_15m is None or df_15m.empty:
       return None
 
     if isinstance(df_15m.columns, pd.MultiIndex):
       df_15m.columns = df_15m.columns.get_level_values(0)
 
     df_1d = yf.download(ticker, period="6mo", interval="1d", progress=False)
+    if df_1d is None or df_1d.empty:
+      return None
+
     if isinstance(df_1d.columns, pd.MultiIndex):
       df_1d.columns = df_1d.columns.get_level_values(0)
 
@@ -126,18 +129,15 @@ def generate_quant_signal(ticker: str, asset_name: str):
       stop_loss = round(current_price - (atr_val * 1.0), 2)
       tp_1 = round(current_price + (atr_val * 1.5), 2)
       tp_2 = round(current_price + (atr_val * 2.5), 2)
-      valid_signal = True
     elif daily_trend == "Bearish" and m15_trend == "Bearish":
       trend = "Bearish (Multi-TF Confirmed)"
       signal = "SELL (SHORT)"
       stop_loss = round(current_price + (atr_val * 1.0), 2)
       tp_1 = round(current_price - (atr_val * 1.5), 2)
       tp_2 = round(current_price - (atr_val * 2.5), 2)
-      valid_signal = True
     else:
       trend = f"Divergence (Daily: {daily_trend} / 15M: {m15_trend})"
       signal = "NO TRADE (Market Divergence)"
-      valid_signal = False
       stop_loss, tp_1, tp_2 = 0, 0, 0
 
     rsi_condition = (
@@ -154,7 +154,6 @@ def generate_quant_signal(ticker: str, asset_name: str):
         "asset": asset_name,
         "current_price": round(current_price, 2),
         "ai_market_insight": ai_commentary,
-        "valid_signal": valid_signal,
         "signal_setup": {
             "action": signal,
             "market_bias": trend,
@@ -175,33 +174,49 @@ def generate_quant_signal(ticker: str, asset_name: str):
 
 @app.get("/", response_class=HTMLResponse)
 def web_dashboard():
-  signals_html = ""
-  for asset in TRACKED_ASSETS:
-    data = generate_quant_signal(asset["symbol"], asset["name"])
-    if not data:
-      continue
-    setup = data["signal_setup"]
-    tech = data["technical_indicators"]
-    badge_color = (
-        "#22c55e"
-        if "BUY" in setup["action"]
-        else ("#ef4444" if "SELL" in setup["action"] else "#eab308")
-    )
+  try:
+    signals_html = ""
+    for asset in TRACKED_ASSETS:
+      data = generate_quant_signal(asset["symbol"], asset["name"])
+      if not data:
+        signals_html += f"""
+                <div class="card">
+                    <div class="card-header">
+                        <h2>{asset['name']}</h2>
+                        <span class="badge" style="background: #eab308;">SYNCING</span>
+                    </div>
+                    <p>🔄 Fetching latest market data...</p>
+                </div>
+                """
+        continue
+      setup = data["signal_setup"]
+      badge_color = (
+          "#22c55e"
+          if "BUY" in setup["action"]
+          else ("#ef4444" if "SELL" in setup["action"] else "#eab308")
+      )
 
-    signals_html += f"""
+      signals_html += f"""
+            <div class="card">
+                <div class="card-header">
+                    <h2>{data['asset']}</h2>
+                    <span class="badge" style="background: {badge_color};">{setup['action']}</span>
+                </div>
+                <div class="price">${data['current_price']:,.2f}</div>
+                <p><strong>Bias:</strong> {setup['market_bias']}</p>
+                <div class="levels">
+                    <div><span>SL:</span> ${setup['signal_setup']['stop_loss_sl']:,.2f}</div>
+                    <div><span>TP1:</span> ${setup['signal_setup']['take_profit_1']:,.2f}</div>
+                    <div><span>TP2:</span> ${setup['signal_setup']['take_profit_2']:,.2f}</div>
+                </div>
+                <p class="insight">💬 {data['ai_market_insight']}</p>
+            </div>
+            """
+  except Exception as e:
+    signals_html = f"""
         <div class="card">
-            <div class="card-header">
-                <h2>{data['asset']}</h2>
-                <span class="badge" style="background: {badge_color};">{setup['action']}</span>
-            </div>
-            <div class="price">${data['current_price']:,.2f}</div>
-            <p><strong>Bias:</strong> {setup['market_bias']}</p>
-            <div class="levels">
-                <div><span>SL:</span> ${setup['signal_setup']['stop_loss_sl']:,.2f}</div>
-                <div><span>TP1:</span> ${setup['signal_setup']['take_profit_1']:,.2f}</div>
-                <div><span>TP2:</span> ${setup['signal_setup']['take_profit_2']:,.2f}</div>
-            </div>
-            <p class="insight">💬 {data['ai_market_insight']}</p>
+            <h2>⚠️ Notice</h2>
+            <p>Market engine initializing: {str(e)}</p>
         </div>
         """
 
@@ -258,8 +273,8 @@ def trigger_broadcast():
           f"📊 *Market Bias:* {setup['market_bias']}\n"
           f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
           f"🛑 *Stop Loss (SL):* ${setup['signal_setup']['stop_loss_sl']:,.2f}\n"
-          f"🎯 *Take Profit 1:* ${signal_data['signal_setup']['take_profit_1']:,.2f}\n"
-          f"🎯 *Take Profit 2:* ${signal_data['signal_setup']['take_profit_2']:,.2f}\n\n"
+          f"🎯 *Take Profit 1:* ${setup['signal_setup']['take_profit_1']:,.2f}\n"
+          f"🎯 *Take Profit 2:* ${setup['signal_setup']['take_profit_2']:,.2f}\n\n"
           f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
           f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
           f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
