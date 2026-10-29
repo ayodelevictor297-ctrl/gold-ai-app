@@ -2,8 +2,8 @@ import asyncio
 import os
 import pandas as pd
 import requests
-import yfinance
-from fastapi import FastAPI, HTTPException, Request
+import yfinance as yf
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from openai import OpenAI
 
 app = FastAPI()
@@ -57,7 +57,7 @@ def get_ai_insight(
 def generate_quant_signal(ticker: str, asset_name: str):
   try:
     # 1. Fetch 15-Minute Tactical Data
-    df_15m = yfinance.download(ticker, period="5d", interval="15m", progress=False)
+    df_15m = yf.download(ticker, period="5d", interval="15m", progress=False)
     if df_15m.empty:
       raise HTTPException(
           status_code=404, detail=f"No 15M market data returned for {ticker}."
@@ -67,7 +67,7 @@ def generate_quant_signal(ticker: str, asset_name: str):
       df_15m.columns = df_15m.columns.get_level_values(0)
 
     # 2. Fetch Daily Macro Data
-    df_1d = yfinance.download(ticker, period="6mo", interval="1d", progress=False)
+    df_1d = yf.download(ticker, period="6mo", interval="1d", progress=False)
     if isinstance(df_1d.columns, pd.MultiIndex):
       df_1d.columns = df_1d.columns.get_level_values(0)
 
@@ -117,7 +117,7 @@ def generate_quant_signal(ticker: str, asset_name: str):
         else "Bearish"
     )
 
-    # STRICT CONFLUENCE FILTER: Only trigger if Daily and 15M match perfectly
+    # STRICT CONFLUENCE FILTER
     if daily_trend == "Bullish" and m15_trend == "Bullish":
       trend = "Bullish (Multi-TF Confirmed)"
       signal = "BUY (LONG)"
@@ -170,14 +170,38 @@ def generate_quant_signal(ticker: str, asset_name: str):
     raise HTTPException(status_code=500, detail=str(e))
 
 
+async def process_signal_background():
+  """Runs signal generation in the background so Telegram webhook never times out"""
+  try:
+    for asset in TRACKED_ASSETS:
+      signal_data = generate_quant_signal(asset["symbol"], asset["name"])
+      tech = signal_data["technical_indicators"]
+      setup = signal_data["signal_setup"]
+
+      signal_message = (
+          f"📊 *ON-DEMAND {asset['name'].upper()} SIGNAL* 📊\n\n"
+          f"📌 *Action:* {setup['action']}\n"
+          f"📊 *Market Bias:* {setup['market_bias']}\n"
+          f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
+          f"🛑 *Stop Loss (SL):* ${setup['signal_setup']['stop_loss_sl']:,.2f}\n"
+          f"🎯 *Take Profit 1:* ${signal_data['signal_setup']['take_profit_1']:,.2f}\n"
+          f"🎯 *Take Profit 2:* ${signal_data['signal_setup']['take_profit_2']:,.2f}\n\n"
+          f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
+          f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
+          f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
+      )
+      send_telegram_alert(signal_message)
+      await asyncio.sleep(1)
+  except Exception as e:
+    send_telegram_alert(f"⚠️ Background Processing Error: {str(e)}")
+
+
 async def autonomous_signal_scheduler():
   await asyncio.sleep(10)
   while True:
     try:
       for asset in TRACKED_ASSETS:
         signal_data = generate_quant_signal(asset["symbol"], asset["name"])
-
-        # ONLY send alert if multi-timeframe trend is strictly confirmed
         if signal_data["valid_signal"]:
           tech = signal_data["technical_indicators"]
           setup = signal_data["signal_setup"]
@@ -196,11 +220,10 @@ async def autonomous_signal_scheduler():
           )
           send_telegram_alert(message)
           await asyncio.sleep(3)
-
     except Exception as e:
       print(f"AUTONOMOUS ENGINE ERROR: {e}")
 
-    # Sleep for 3 hours (10800 seconds) between sweeps
+    # Sleep for 3 hours (10800 seconds)
     await asyncio.sleep(10800)
 
 
@@ -210,7 +233,7 @@ async def startup_event():
 
 
 @app.post("/telegram-webhook")
-async def telegram_webhook(request: Request):
+async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
   try:
     data = await request.json()
     if "message" in data:
@@ -218,30 +241,11 @@ async def telegram_webhook(request: Request):
       text = message.get("text", "").strip()
 
       if text == "/signal":
-        for asset in TRACKED_ASSETS:
-          try:
-            signal_data = generate_quant_signal(asset["symbol"], asset["name"])
-            tech = signal_data["technical_indicators"]
-            setup = signal_data["signal_setup"]
-
-            signal_message = (
-                f"📊 *ON-DEMAND {asset['name'].upper()} SIGNAL* 📊\n\n"
-                f"📌 *Action:* {setup['action']}\n"
-                f"📊 *Market Bias:* {setup['market_bias']}\n"
-                f"💰 *Entry Price:* ${signal_data['current_price']:,.2f}\n\n"
-                f"🛑 *Stop Loss (SL):* ${setup['stop_loss_sl']:,.2f}\n"
-                f"🎯 *Take Profit 1:* ${setup['take_profit_1']:,.2f}\n"
-                f"🎯 *Take Profit 2:* ${setup['take_profit_2']:,.2f}\n\n"
-                f"📈 *RSI (14):* {tech['rsi_14']} ({tech['rsi_condition']})\n"
-                f"⚡ *ATR Volatility:* {tech['atr_volatility']:,.2f}\n\n"
-                f"💬 *AI Desk Insight:* {signal_data['ai_market_insight']}"
-            )
-            send_telegram_alert(signal_message)
-          except Exception as inner_e:
-            send_telegram_alert(
-                f"⚠️ Error processing {asset['name']}: {str(inner_e)}"
-            )
-          await asyncio.sleep(1)
+        # Dispatch to background task so Telegram webhook returns 200 OK instantly!
+        background_tasks.add_task(process_signal_background)
+        send_telegram_alert(
+            "⏳ *Generating live quant signals for Gold & Bitcoin...*"
+        )
 
       elif text == "/status":
         status_message = (
