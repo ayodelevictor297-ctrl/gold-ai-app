@@ -9,12 +9,11 @@ from openai import OpenAI
 
 app = FastAPI(title="Quant Engine Pro")
 
-# Persistent active trades tracker
 ACTIVE_SIGNALS = {}
 
 TRACKED_ASSETS = [
-    {"symbol": "XAU/USD", "name": "Gold", "fallback_price": 2750.00},
-    {"symbol": "BTC/USD", "name": "Bitcoin", "fallback_price": 92000.00},
+    {"symbol": "XAU/USD", "name": "Gold", "fallback_price": 4039.00},
+    {"symbol": "BTC/USD", "name": "Bitcoin", "fallback_price": 79296.00},
 ]
 
 
@@ -44,9 +43,9 @@ def get_ai_insight(asset_name, current_price, rsi_val, trend, action):
   try:
     client = OpenAI(api_key=api_key)
     prompt = (
-        f"You are a quant trader. Provide a 2-sentence institutional trade"
-        f" summary for {asset_name} at ${current_price:,.2f}. Trend: {trend},"
-        f" RSI: {rsi_val:.2f}, Signal: {action}."
+        f"You are a quant trader. Provide a short, punchy 2-sentence market"
+        f" summary for {asset_name} trading at ${current_price:,.2f}. Trend:"
+        f" {trend}, RSI: {rsi_val:.2f}, Signal: {action}."
     )
     res = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -61,14 +60,14 @@ def get_ai_insight(asset_name, current_price, rsi_val, trend, action):
 def fetch_twelve_data(symbol: str, fallback_price: float):
   api_key = os.getenv("TWELVE_DATA_API_KEY")
   if not api_key:
-    return fallback_price, 55.0, "Bullish", 30.0
+    return fallback_price, 55.0, "Bullish", 35.0
 
   try:
     url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=15min&outputsize=30&apikey={api_key}"
     res = requests.get(url, timeout=10).json()
     values = res.get("values", [])
     if not values:
-      return fallback_price, 55.0, "Bullish", 30.0
+      return fallback_price, 55.0, "Bullish", 35.0
 
     df = pd.DataFrame(values)
     df["close"] = df["close"].astype(float)
@@ -77,7 +76,6 @@ def fetch_twelve_data(symbol: str, fallback_price: float):
 
     current_price = df["close"].iloc[0]
 
-    # Quick RSI & ATR calculation
     delta = df["close"].diff(-1)
     gain = delta.where(delta > 0, 0).rolling(14).mean().iloc[0]
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean().iloc[0]
@@ -88,13 +86,13 @@ def fetch_twelve_data(symbol: str, fallback_price: float):
     )
 
     tr = (df["high"] - df["low"]).rolling(14).mean().iloc[0]
-    atr = tr if not pd.isna(tr) else 15.0
+    atr = tr if not pd.isna(tr) else 25.0
     trend = "Bullish" if df["close"].iloc[0] > df["close"].iloc[10] else "Bearish"
 
     return current_price, rsi, trend, atr
   except Exception as e:
     print(f"API Error ({symbol}): {e}")
-    return fallback_price, 55.0, "Bullish", 30.0
+    return fallback_price, 55.0, "Bullish", 35.0
 
 
 def evaluate_signal(asset):
@@ -119,7 +117,6 @@ def evaluate_signal(asset):
       else round(price - (atr * 2.5), 2)
   )
 
-  # Check lifecycle state against active positions
   status_tag = "🟢 Active • Now"
   if symbol in ACTIVE_SIGNALS:
     prev = ACTIVE_SIGNALS[symbol]
@@ -151,19 +148,18 @@ def evaluate_signal(asset):
 
 
 async def autonomous_market_scanner():
-  """Background loop running every 5 minutes to auto-broadcast updates."""
   for asset in TRACKED_ASSETS:
     data = evaluate_signal(asset)
     msg = (
-        f"⚡ *SIGNALPRO AUTOMATED DESK* ⚡\n\n"
-        f"📊 *Asset:* {data['asset']}\n"
-        f"📌 *Action:* {data['action']} | *Status:* {data['status']}\n"
-        f"💰 *Entry:* ${data['price']:,.2f}\n\n"
-        f"🛑 *SL:* ${data['sl']:,.2f}\n"
-        f"🎯 *TP1:* ${data['tp1']:,.2f}\n"
-        f"🎯 *TP2:* ${data['tp2']:,.2f}\n\n"
-        f"📈 *RSI:* {data['rsi']}\n"
-        f"💬 *AI Desk:* {data['insight']}"
+        f"📊 *SIGNALPRO AUTOMATED DESK* 📊\n\n"
+        f"📌 *Asset:* {data['asset']}\n"
+        f"⚡ *Action:* {data['action']} | *Status:* {data['status']}\n"
+        f"💰 *Entry Price:* ${data['price']:,.2f}\n\n"
+        f"🛑 *Stop Loss (SL):* ${data['sl']:,.2f}\n"
+        f"🎯 *Take Profit 1:* ${data['tp1']:,.2f}\n"
+        f"🎯 *Take Profit 2:* ${data['tp2']:,.2f}\n\n"
+        f"📈 *RSI (14):* {data['rsi']}\n"
+        f"💬 *AI Desk Insight:* {data['insight']}"
     )
     send_telegram_alert(msg)
     await asyncio.sleep(2)
@@ -172,13 +168,8 @@ async def autonomous_market_scanner():
 @app.on_event("startup")
 def init_scheduler():
   scheduler = AsyncIOScheduler()
-  # Automatically scans markets every 5 minutes
-  scheduler.add_job(autonomous_market_scheduler_task, "interval", minutes=5)
+  scheduler.add_job(autonomous_market_scanner, "interval", minutes=15)
   scheduler.start()
-
-
-async def autonomous_market_scheduler_task():
-  await autonomous_market_scanner()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -193,16 +184,16 @@ def dashboard():
     )
     cards += f"""
         <div style="background:#1e293b; border-radius:12px; padding:16px; margin-bottom:12px; border:1px solid #334155; color:#fff;">
-            <div style="display:flex; justify-content:space-between;">
-                <h3>{data['asset']}</h3>
-                <span style="background:{badge_color}; padding:4px 8px; border-radius:6px; font-weight:bold;">{data['action']}</span>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0;">{data['asset']}</h3>
+                <span style="background:{badge_color}; padding:4px 8px; border-radius:6px; font-size:12px; font-weight:bold;">{data['action']}</span>
             </div>
-            <div style="font-size:20px; font-weight:bold; margin:8px 0;">${data['price']:,.2f}</div>
-            <div style="font-size:12px; color:#a7f3d0; margin-bottom:8px;">Status: {data['status']}</div>
+            <div style="font-size:22px; font-weight:bold; margin:8px 0;">${data['price']:,.2f}</div>
+            <div style="font-size:12px; color:#38bdf8; margin-bottom:8px;">Status: {data['status']}</div>
             <div style="display:grid; grid-template-columns:1fr 1fr 1fr; background:#0f172a; padding:8px; border-radius:6px; text-align:center; font-size:12px;">
-                <div>SL: ${data['sl']:,.2f}</div>
-                <div>TP1: ${data['tp1']:,.2f}</div>
-                <div>TP2: ${data['tp2']:,.2f}</div>
+                <div><span>SL</span><br>${data['sl']:,.2f}</div>
+                <div><span>TP1</span><br>${data['tp1']:,.2f}</div>
+                <div><span>TP2</span><br>${data['tp2']:,.2f}</div>
             </div>
             <p style="font-size:12px; color:#cbd5e1; font-style:italic; margin-top:8px;">💬 {data['insight']}</p>
         </div>
@@ -211,8 +202,9 @@ def dashboard():
   return HTMLResponse(content=f"""
     <html>
         <body style="background:#0f172a; font-family:sans-serif; max-width:500px; margin:auto; padding:20px;">
-            <h2 style="color:#38bdf8; text-align:center;">⚡ SignalPro AI Engine</h2>
-            <a href="/trigger-broadcast" style="display:block; background:#2563eb; color:#fff; text-align:center; padding:12px; border-radius:8px; text-decoration:none; font-weight:bold; margin-bottom:20px;">🚀 Push Manual Update</a>
+            <h1 style="color:#38bdf8; text-align:center; font-size:22px;">⚡ SignalPro AI Engine</h1>
+            <p style="color:#94a3b8; text-align:center; font-size:13px;">Live Autonomous 15-Minute Confluence Scanner</p>
+            <a href="/trigger-broadcast" style="display:block; background:#2563eb; color:#fff; text-align:center; padding:12px; border-radius:8px; text-decoration:none; font-weight:bold; margin:20px 0;">🚀 Broadcast Live Signals Now</a>
             {cards}
         </body>
     </html>
@@ -222,14 +214,16 @@ def dashboard():
 @app.get("/trigger-broadcast")
 async def trigger_broadcast():
   await autonomous_market_scanner()
-  return HTMLResponse("<h3>✅ Auto-scan complete and signals sent!</h3>")
+  return HTMLResponse(
+      "<h3>✅ Live signals successfully broadcasted to Telegram! <a"
+      " href='/'>Back</a></h3>"
+  )
 
 
 @app.post("/telegram-webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
   data = await request.json()
   if "message" in data:
-    chat_id = str(data["message"]["chat"]["id"])
     text = data["message"].get("text", "")
     if text in ["/signal", "/status"]:
       background_tasks.add_task(autonomous_market_scanner)
