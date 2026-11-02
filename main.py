@@ -104,7 +104,7 @@ def evaluate_signal(asset):
     
     # Professional Multi-Target Risk Setup
     is_buy = "BUY" in action
-    sl = round(price - (atr * 1.2), 2) if is_buy else round(price + (atr * 1.2), 2)
+    sl = round(price - (atr * 0.7), 2) if is_buy else round(price + (atr * 1.2), 2)
     tp1 = round(price + (atr * 1.5), 2) if is_buy else round(price - (atr * 1.5), 2)
     tp2 = round(price + (atr * 2.8), 2) if is_buy else round(price - (atr * 2.8), 2)
     tp3 = round(price + (atr * 4.5), 2) if is_buy else round(price - (atr * 4.5), 2)
