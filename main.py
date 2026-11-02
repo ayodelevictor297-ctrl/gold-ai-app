@@ -11,6 +11,7 @@ app = FastAPI(title="Quant Engine Pro")
 
 ACTIVE_SIGNALS = {}
 
+# Locked strictly to Gold and Bitcoin per your setup
 TRACKED_ASSETS = [
     {"symbol": "XAU/USD", "name": "Gold", "fallback_price": 4039.00},
     {"symbol": "BTC/USD", "name": "Bitcoin", "fallback_price": 79296.00},
@@ -102,12 +103,12 @@ def evaluate_signal(asset):
 
     action = "BUY (LONG)" if trend == "Bullish" else "SELL (SHORT)"
     
-    # Professional Multi-Target Risk Setup
+    # Tight Institutional Risk Setup (Optimized SL Multiplier)
     is_buy = "BUY" in action
-    sl = round(price - (atr * 0.7), 2) if is_buy else round(price + (atr * 1.2), 2)
-    tp1 = round(price + (atr * 1.5), 2) if is_buy else round(price - (atr * 1.5), 2)
-    tp2 = round(price + (atr * 2.8), 2) if is_buy else round(price - (atr * 2.8), 2)
-    tp3 = round(price + (atr * 4.5), 2) if is_buy else round(price - (atr * 4.5), 2)
+    sl = round(price - (atr * 0.7), 2) if is_buy else round(price + (atr * 0.7), 2)
+    tp1 = round(price + (atr * 1.2), 2) if is_buy else round(price - (atr * 1.2), 2)
+    tp2 = round(price + (atr * 2.2), 2) if is_buy else round(price - (atr * 2.2), 2)
+    tp3 = round(price + (atr * 3.5), 2) if is_buy else round(price - (atr * 3.5), 2)
 
     # Distance metrics (Points / Pips)
     sl_dist = round(abs(price - sl), 1)
@@ -122,7 +123,6 @@ def evaluate_signal(asset):
     
     if symbol in ACTIVE_SIGNALS:
         prev = ACTIVE_SIGNALS[symbol]
-        # If price reaches TP1, lock profits by moving SL to Break-Even (BE)
         if (is_buy and price >= prev["tp1"]) or (not is_buy and price <= prev["tp1"]):
             status_tag = "🎯 1 TP Hit (SL -> BE)"
             sl_label = f"BE (${price:,.2f})"
@@ -219,7 +219,7 @@ def dashboard():
     <html>
         <body style="background:#0f172a; font-family:sans-serif; max-width:500px; margin:auto; padding:20px;">
             <h1 style="color:#38bdf8; text-align:center; font-size:22px;">⚡ SignalPro AI Pro Engine</h1>
-            <p style="color:#94a3b8; text-align:center; font-size:13px;">Live Multi-Target Institutional Scanner</p>
+            <p style="color:#94a3b8; text-align:center; font-size:13px;">Live Gold & Bitcoin Institutional Scanner</p>
             <a href="/trigger-broadcast" style="display:block; background:#2563eb; color:#fff; text-align:center; padding:12px; border-radius:8px; text-decoration:none; font-weight:bold; margin:20px 0;">🚀 Broadcast Pro Signals Now</a>
             {cards}
         </body>
@@ -231,7 +231,7 @@ def dashboard():
 async def trigger_broadcast():
     await autonomous_market_scanner()
     return HTMLResponse(
-        "<h3>✅ Pro signals successfully broadcasted to Telegram! <a"
+        "<h3>✅ Gold & Bitcoin signals successfully broadcasted to Telegram! <a"
         " href='/'>Back</a></h3>"
     )
 
