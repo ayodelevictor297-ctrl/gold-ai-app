@@ -1,4 +1,6 @@
 import asyncio
+import logging
+from datetime import datetime
 import os
 import pandas as pd
 import requests
@@ -7,11 +9,19 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from openai import OpenAI
 
-app = FastAPI(title="Quant Engine Pro")
+# Configure clean production logging with precise timestamps
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("QuantEngine")
+
+app = FastAPI(title="Quant Engine Pro - Gold & Bitcoin")
 
 ACTIVE_SIGNALS = {}
 
-# Locked strictly to Gold and Bitcoin per your setup
+# Locked strictly to Gold and Bitcoin
 TRACKED_ASSETS = [
     {"symbol": "XAU/USD", "name": "Gold", "fallback_price": 4039.00},
     {"symbol": "BTC/USD", "name": "Bitcoin", "fallback_price": 79296.00},
@@ -22,6 +32,7 @@ def send_telegram_alert(message: str, chat_id: str = None):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     target_chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
     if not token or not target_chat_id:
+        logger.warning("Telegram token or chat ID missing. Alert skipped.")
         return
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -31,9 +42,15 @@ def send_telegram_alert(message: str, chat_id: str = None):
         "parse_mode": "Markdown",
     }
     try:
-        requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            logger.info("Telegram alert dispatched successfully.")
+        else:
+            logger.error(
+                f"Telegram API failed with status {response.status_code}: {response.text}"
+            )
     except Exception as e:
-        print(f"Telegram alert error: {e}")
+        logger.error(f"Telegram alert exception: {e}")
 
 
 def get_ai_insight(asset_name, current_price, rsi_val, trend, action):
@@ -54,13 +71,17 @@ def get_ai_insight(asset_name, current_price, rsi_val, trend, action):
             max_tokens=60,
         )
         return res.choices[0].message.content.strip()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"OpenAI API error for {asset_name}: {e}")
         return f"Multi-timeframe momentum verified for {asset_name}."
 
 
 def fetch_twelve_data(symbol: str, fallback_price: float):
     api_key = os.getenv("TWELVE_DATA_API_KEY")
     if not api_key:
+        logger.warning(
+            f"Twelve Data API key missing. Using fallback for {symbol}."
+        )
         return fallback_price, 50.0, "Bullish", 35.0
 
     try:
@@ -68,6 +89,7 @@ def fetch_twelve_data(symbol: str, fallback_price: float):
         res = requests.get(url, timeout=10).json()
         values = res.get("values", [])
         if not values:
+            logger.warning(f"Empty values returned from Twelve Data for {symbol}.")
             return fallback_price, 50.0, "Bullish", 35.0
 
         df = pd.DataFrame(values)
@@ -92,7 +114,7 @@ def fetch_twelve_data(symbol: str, fallback_price: float):
 
         return current_price, rsi, trend, atr
     except Exception as e:
-        print(f"API Error ({symbol}): {e}")
+        logger.error(f"Twelve Data API exception for {symbol}: {e}")
         return fallback_price, 50.0, "Bullish", 35.0
 
 
@@ -102,25 +124,23 @@ def evaluate_signal(asset):
     price, rsi, trend, atr = fetch_twelve_data(symbol, asset["fallback_price"])
 
     action = "BUY (LONG)" if trend == "Bullish" else "SELL (SHORT)"
-    
-    # Tight Institutional Risk Setup (Optimized SL Multiplier)
+
+    # Tight Institutional Stop Loss Multiplier
     is_buy = "BUY" in action
     sl = round(price - (atr * 0.7), 2) if is_buy else round(price + (atr * 0.7), 2)
     tp1 = round(price + (atr * 1.2), 2) if is_buy else round(price - (atr * 1.2), 2)
     tp2 = round(price + (atr * 2.2), 2) if is_buy else round(price - (atr * 2.2), 2)
     tp3 = round(price + (atr * 3.5), 2) if is_buy else round(price - (atr * 3.5), 2)
 
-    # Distance metrics (Points / Pips)
     sl_dist = round(abs(price - sl), 1)
     tp1_dist = round(abs(tp1 - price), 1)
     tp2_dist = round(abs(tp2 - price), 1)
     tp3_dist = round(abs(tp3 - price), 1)
     rr_ratio = round(tp1_dist / sl_dist, 1) if sl_dist > 0 else 1.5
 
-    # Target tracking & Break-Even management status
     status_tag = "🟢 Active • Now"
     sl_label = f"${sl:,.2f} (-{sl_dist}p)"
-    
+
     if symbol in ACTIVE_SIGNALS:
         prev = ACTIVE_SIGNALS[symbol]
         if (is_buy and price >= prev["tp1"]) or (not is_buy and price <= prev["tp1"]):
@@ -158,25 +178,36 @@ def evaluate_signal(asset):
 
 
 async def autonomous_market_scanner():
-    for asset in TRACKED_ASSETS:
-        data = evaluate_signal(asset)
-        msg = (
-            f"⚡ *SIGNALPRO QUANT DESK* ⚡\n\n"
-            f"📌 *Asset:* {data['asset']}\n"
-            f"🔹 *Action:* {data['action']} | *Status:* {data['status']}\n"
-            f"💰 *Entry Price:* ${data['price']:,.2f}\n"
-            f"⚖️ *Risk/Reward:* 1:{data['rr_ratio']}\n\n"
-            f"🛡️ *Stop Loss (SL):* {data['sl_label']}\n"
-            f"🎯 *Take Profit 1:* ${data['tp1']:,.2f} (+{data['tp1_dist']} pts)\n"
-            f"🎯 *Take Profit 2:* ${data['tp2']:,.2f} (+{data['tp2_dist']} pts)\n"
-            f"🎯 *Take Profit 3:* ${data['tp3']:,.2f} (+{data['tp3_dist']} pts)\n\n"
-            f"📈 *RSI (14):* {data['rsi']}\n"
-            f"💬 *Quant Insight:* {data['insight']}\n\n"
-            f"──────────────────────\n"
-            f"⚠️ *Institutional Risk Protocol:* Max 1.5% exposure per execution."
-        )
-        send_telegram_alert(msg)
-        await asyncio.sleep(2)
+    scan_start = datetime.now()
+    logger.info(
+        f"--- Starting Autonomous Market Scan at {scan_start.strftime('%Y-%m-%d %H:%M:%S')} ---"
+    )
+
+    try:
+        for asset in TRACKED_ASSETS:
+            data = evaluate_signal(asset)
+            msg = (
+                f"⚡ *SIGNALPRO QUANT DESK* ⚡\n\n"
+                f"📌 *Asset:* {data['asset']}\n"
+                f"🔹 *Action:* {data['action']} | *Status:* {data['status']}\n"
+                f"💰 *Entry Price:* ${data['price']:,.2f}\n"
+                f"⚖️ *Risk/Reward:* 1:{data['rr_ratio']}\n\n"
+                f"🛡️ *Stop Loss (SL):* {data['sl_label']}\n"
+                f"🎯 *Take Profit 1:* ${data['tp1']:,.2f} (+{data['tp1_dist']} pts)\n"
+                f"🎯 *Take Profit 2:* ${data['tp2']:,.2f} (+{data['tp2_dist']} pts)\n"
+                f"🎯 *Take Profit 3:* ${data['tp3']:,.2f} (+{data['tp3_dist']} pts)\n\n"
+                f"📈 *RSI (14):* {data['rsi']}\n"
+                f"💬 *Quant Insight:* {data['insight']}\n\n"
+                f"──────────────────────\n"
+                f"⚠️ *Institutional Risk Protocol:* Max 1.5% exposure per execution."
+            )
+            send_telegram_alert(msg)
+            logger.info(f"Successfully processed and broadcasted: {data['asset']}")
+            await asyncio.sleep(2)
+
+        logger.info("--- Market Scan Completed Successfully ---")
+    except Exception as e:
+        logger.error(f"CRITICAL ERROR in autonomous_market_scanner: {e}")
 
 
 @app.on_event("startup")
@@ -184,6 +215,9 @@ def init_scheduler():
     scheduler = AsyncIOScheduler()
     scheduler.add_job(autonomous_market_scanner, "interval", minutes=15)
     scheduler.start()
+    logger.info(
+        "APScheduler started successfully. Background scanner job scheduled every 15 minutes."
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -229,6 +263,7 @@ def dashboard():
 
 @app.get("/trigger-broadcast")
 async def trigger_broadcast():
+    logger.info("Manual broadcast triggered via web dashboard.")
     await autonomous_market_scanner()
     return HTMLResponse(
         "<h3>✅ Gold & Bitcoin signals successfully broadcasted to Telegram! <a"
@@ -242,5 +277,6 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     if "message" in data:
         text = data["message"].get("text", "")
         if text in ["/signal", "/status"]:
+            logger.info(f"Webhook received command: {text}")
             background_tasks.add_task(autonomous_market_scanner)
     return {"status": "ok"}
