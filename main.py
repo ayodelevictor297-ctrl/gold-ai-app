@@ -28,9 +28,9 @@ TRACKED_ASSETS = [
 ]
 
 
-def send_telegram_alert(message: str, chat_id: str = None):
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    target_chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
+def send_telegram_alert(message: str, chat_id: str | None = None):
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or ""
+    target_chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID") or ""
     if not token or not target_chat_id:
         logger.warning("Telegram token or chat ID missing. Alert skipped.")
         return
@@ -70,7 +70,8 @@ def get_ai_insight(asset_name, current_price, rsi_val, trend, action):
             messages=[{"role": "user", "content": prompt}],
             max_tokens=60,
         )
-        return res.choices[0].message.content.strip()
+        content = res.choices[0].message.content
+        return content.strip() if content else f"Multi-timeframe momentum verified for {asset_name}."
     except Exception as e:
         logger.warning(f"OpenAI API error for {asset_name}: {e}")
         return f"Multi-timeframe momentum verified for {asset_name}."
@@ -125,7 +126,6 @@ def evaluate_signal(asset):
 
     action = "BUY (LONG)" if trend == "Bullish" else "SELL (SHORT)"
 
-    # Tight Institutional Stop Loss Multiplier
     is_buy = "BUY" in action
     sl = round(price - (atr * 0.7), 2) if is_buy else round(price + (atr * 0.7), 2)
     tp1 = round(price + (atr * 1.2), 2) if is_buy else round(price - (atr * 1.2), 2)
@@ -234,7 +234,7 @@ def dashboard():
             <div style="background:#1e293b; border-radius:12px; padding:16px; margin-bottom:12px; border:1px solid #334155; color:#fff;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h3 style="margin:0;">{data['asset']}</h3>
-                    <span style="background:{badge_color}; padding:4px 8px; border-radius:6px; font-size:12px; font-weight:bold;">{data['action']}</span>
+                    <span style="background:{badge_color}; padding:4px 8px; border-radius:6px; font-weight:bold; font-size:12px;">{data['action']}</span>
                 </div>
                 <div style="font-size:22px; font-weight:bold; margin:8px 0;">${data['price']:,.2f}</div>
                 <div style="font-size:12px; color:#38bdf8; margin-bottom:4px;">Status: {data['status']}</div>
